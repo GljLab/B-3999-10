@@ -330,6 +330,7 @@ public class TopicController {
     public Result<Map<String, Object>> getMyFollowedTopics(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "followedAt") String sort,
             HttpServletRequest request) {
 
         Long currentUserId = ((Number) request.getAttribute("userId")).longValue();
@@ -346,10 +347,20 @@ public class TopicController {
                 .map(follow -> {
                     Topic topic = topicMap.get(follow.getTopicId());
                     if (topic == null) return null;
-                    return TopicVO.from(topic, true);
+                    TopicVO vo = TopicVO.from(topic, true);
+                    vo.setFollowedAt(follow.getCreatedAt());
+                    return vo;
                 })
                 .filter(Objects::nonNull)
-                .toList();
+                .collect(Collectors.toList());
+
+        if ("hot".equals(sort)) {
+            voList.sort((a, b) -> {
+                int compare = Integer.compare(b.getFollowCount(), a.getFollowCount());
+                if (compare != 0) return compare;
+                return Integer.compare(b.getPostCount(), a.getPostCount());
+            });
+        }
 
         Map<String, Object> result = new HashMap<>();
         result.put("content", voList);

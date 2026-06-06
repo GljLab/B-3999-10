@@ -14,6 +14,7 @@ public class TopicVO {
     private Integer followCount;
     private Integer isFeatured;
     private LocalDateTime createdAt;
+    private LocalDateTime followedAt;
     private Boolean followed;
 
     public static TopicVO from(Topic topic) {

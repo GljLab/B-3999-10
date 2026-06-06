@@ -33,4 +33,9 @@ public interface PostCommentRepository extends JpaRepository<PostComment, Long> 
                                          Pageable pageable);
 
     boolean existsByParentIdAndDeletedFalse(Long parentId);
+
+    @Query("SELECT c.postId FROM PostComment c WHERE c.userId = :userId AND c.deleted = false")
+    List<Long> findPostIdsByUserId(@Param("userId") Long userId);
+
+    int countByUserId(Long userId);
 }

@@ -26,6 +26,22 @@
         <el-table :data="posts" stripe class="w-full flex-1" :loading="postsLoading" v-loading="postsLoading">
           <el-table-column prop="id" label="ID" width="70" />
           <el-table-column prop="title" label="主题" min-width="200" show-overflow-tooltip />
+          <el-table-column label="话题标签" min-width="200">
+            <template #default="{ row }">
+              <div class="flex flex-wrap gap-1">
+                <el-tag
+                  v-for="t in row.topics || []"
+                  :key="t.id"
+                  type="success"
+                  size="small"
+                  effect="light"
+                >
+                  {{ t.icon }} {{ t.name }}
+                </el-tag>
+                <span v-if="!row.topics || row.topics.length === 0" class="text-xs text-gray-400">无标签</span>
+              </div>
+            </template>
+          </el-table-column>
           <el-table-column prop="authorName" label="作者账号" width="140" />
           <el-table-column label="发表时间" width="170">
             <template #default="{ row }">{{ formatDate(row.createdAt) }}</template>
@@ -68,6 +84,21 @@
             <div class="mb-4">
               <span class="text-gray-500 text-sm">查看次数：</span>
               <span>{{ detailPost.viewCount }}</span>
+            </div>
+            <div class="mb-4">
+              <span class="text-gray-500 text-sm block mb-1">话题标签：</span>
+              <div class="flex flex-wrap gap-1">
+                <el-tag
+                  v-for="t in detailPost.topics || []"
+                  :key="t.id"
+                  type="success"
+                  size="small"
+                  effect="light"
+                >
+                  {{ t.icon }} {{ t.name }}
+                </el-tag>
+                <span v-if="!detailPost.topics || detailPost.topics.length === 0" class="text-sm text-gray-400">无标签</span>
+              </div>
             </div>
             <div class="mb-4">
               <span class="text-gray-500 text-sm block mb-1">详细描述：</span>

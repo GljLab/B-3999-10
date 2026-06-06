@@ -169,7 +169,8 @@ public class AdminController {
             @RequestParam(defaultValue = "20") int size,
             @RequestParam(required = false) String username,
             @RequestParam(required = false) String startDate,
-            @RequestParam(required = false) String endDate) {
+            @RequestParam(required = false) String endDate,
+            @RequestParam(required = false) Integer tagged) {
 
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
         Page<CommunityPost> postPage;
@@ -191,10 +192,32 @@ public class AdminController {
             postPage = communityPostRepository.findAllByOrderByCreatedAtDesc(pageable);
         }
 
+        List<CommunityPost> posts = postPage.getContent();
+
+        if (tagged != null) {
+            List<Long> postIds = posts.stream().map(CommunityPost::getId).toList();
+            List<Long> topicIds = postTopicRepository.findTopicIdsByPostIdIn(postIds);
+            final Set<Long> taggedPostIdSet = new HashSet<>();
+            if (!topicIds.isEmpty()) {
+                List<Long> taggedPostIds = postTopicRepository.findPostIdsByTopicIdIn(topicIds);
+                taggedPostIdSet.addAll(taggedPostIds);
+            }
+            if (tagged == 1) {
+                posts = posts.stream().filter(p -> taggedPostIdSet.contains(p.getId())).toList();
+            } else {
+                posts = posts.stream().filter(p -> !taggedPostIdSet.contains(p.getId())).toList();
+            }
+        }
+
+        Map<Long, List<Topic>> postTopicsMap = getPostTopicsMap(posts);
+
         Map<String, Object> result = new HashMap<>();
-        result.put("content", postPage.getContent().stream().map(post -> {
+        result.put("content", posts.stream().map(post -> {
             User author = userRepository.findById(post.getUserId()).orElse(null);
-            return CommunityPostDetailVO.from(post, author);
+            CommunityPostDetailVO vo = CommunityPostDetailVO.from(post, author);
+            List<Topic> postTopics = postTopicsMap.getOrDefault(post.getId(), List.of());
+            vo.setTopics(postTopics.stream().map(TopicVO::from).toList());
+            return vo;
         }).toList());
         result.put("totalElements", postPage.getTotalElements());
         result.put("totalPages", postPage.getTotalPages());
@@ -202,6 +225,25 @@ public class AdminController {
         result.put("last", postPage.isLast());
 
         return Result.success(result);
+    }
+
+    private Map<Long, List<Topic>> getPostTopicsMap(List<CommunityPost> posts) {
+        if (posts.isEmpty()) return Map.of();
+        List<Long> postIds = posts.stream().map(CommunityPost::getId).toList();
+        List<Long> topicIds = postTopicRepository.findTopicIdsByPostIdIn(postIds);
+        List<Topic> allTopics = topicRepository.findByIdIn(topicIds);
+        Map<Long, Topic> topicMap = allTopics.stream().collect(Collectors.toMap(Topic::getId, t -> t));
+
+        Map<Long, List<Topic>> result = new HashMap<>();
+        for (Long postId : postIds) {
+            List<Long> pTopicIds = postTopicRepository.findTopicIdsByPostId(postId);
+            List<Topic> pTopics = pTopicIds.stream()
+                    .map(topicMap::get)
+                    .filter(Objects::nonNull)
+                    .toList();
+            result.put(postId, pTopics);
+        }
+        return result;
     }
 
     @DeleteMapping("/community/posts/{id}")

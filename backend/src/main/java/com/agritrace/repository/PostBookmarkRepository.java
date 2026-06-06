@@ -23,4 +23,9 @@ public interface PostBookmarkRepository extends JpaRepository<PostBookmark, Long
 
     @Query("SELECT b FROM PostBookmark b WHERE b.userId = :userId AND b.postId IN :postIds")
     List<PostBookmark> findByUserIdAndPostIdIn(@Param("userId") Long userId, @Param("postIds") List<Long> postIds);
+
+    @Query("SELECT b.postId FROM PostBookmark b WHERE b.userId = :userId")
+    List<Long> findPostIdsByUserId(@Param("userId") Long userId);
+
+    int countByUserId(Long userId);
 }

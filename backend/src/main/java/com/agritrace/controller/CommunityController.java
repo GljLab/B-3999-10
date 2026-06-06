@@ -115,19 +115,42 @@ public class CommunityController {
 
             return buildPostListResult(pagedPosts, allPosts.size(), page, size, currentUserId);
         } else if ("recommend".equals(tab)) {
-            Pageable allPageable = PageRequest.of(0, 200, Sort.by(Sort.Direction.DESC, "createdAt"));
+            Pageable allPageable = PageRequest.of(0, 300, Sort.by(Sort.Direction.DESC, "createdAt"));
             Page<CommunityPost> allPostPage = communityPostRepository.findAllByOrderByCreatedAtDesc(allPageable);
             List<CommunityPost> allPosts = allPostPage.getContent();
 
             allPosts = allPosts.stream()
                     .filter(p -> ChronoUnit.DAYS.between(p.getCreatedAt(), LocalDateTime.now()) <= 7)
-                    .sorted(Comparator.comparingDouble((CommunityPost p) ->
-                            calculatePostScore(p, LocalDateTime.now())).reversed())
                     .toList();
+
+            List<CommunityPost> finalPosts = allPosts;
+            List<CommunityPost> recommendedPosts;
+
+            if (currentUserId != null) {
+                Map<Long, Double> topicInterestScores = calculateUserTopicInterests(currentUserId);
+                int interactionCount = countUserInteractions(currentUserId);
+
+                if (interactionCount >= 10 && !topicInterestScores.isEmpty()) {
+                    recommendedPosts = finalPosts.stream()
+                            .sorted(Comparator.comparingDouble((CommunityPost p) ->
+                                    calculatePersonalizedScore(p, topicInterestScores, LocalDateTime.now())).reversed())
+                            .toList();
+                } else {
+                    recommendedPosts = finalPosts.stream()
+                            .sorted(Comparator.comparingDouble((CommunityPost p) ->
+                                    calculatePostScore(p, LocalDateTime.now())).reversed())
+                            .toList();
+                }
+            } else {
+                recommendedPosts = finalPosts.stream()
+                        .sorted(Comparator.comparingDouble((CommunityPost p) ->
+                                calculatePostScore(p, LocalDateTime.now())).reversed())
+                        .toList();
+            }
 
             Set<Long> usedTopics = new HashSet<>();
             List<CommunityPost> diversePosts = new ArrayList<>();
-            for (CommunityPost post : allPosts) {
+            for (CommunityPost post : recommendedPosts) {
                 List<Long> postTopicIds = postTopicRepository.findTopicIdsByPostId(post.getId());
                 boolean hasNewTopic = postTopicIds.stream().anyMatch(tid -> !usedTopics.contains(tid));
                 if (hasNewTopic || diversePosts.size() < 5) {
@@ -161,6 +184,59 @@ public class CommunityController {
         double qualityBonus = (post.getIsFeatured() != null && post.getIsFeatured() == 1) ? 10 : 0;
 
         return (interactionScore + qualityBonus) * timeWeight + Math.random() * 0.5;
+    }
+
+    private Map<Long, Double> calculateUserTopicInterests(Long userId) {
+        Map<Long, Double> interestScores = new HashMap<>();
+
+        List<Long> likedPostIds = postLikeRepository.findPostIdsByUserId(userId);
+        for (Long postId : likedPostIds) {
+            List<Long> topicIds = postTopicRepository.findTopicIdsByPostId(postId);
+            for (Long topicId : topicIds) {
+                interestScores.merge(topicId, 2.0, Double::sum);
+            }
+        }
+
+        List<Long> bookmarkedPostIds = postBookmarkRepository.findPostIdsByUserId(userId);
+        for (Long postId : bookmarkedPostIds) {
+            List<Long> topicIds = postTopicRepository.findTopicIdsByPostId(postId);
+            for (Long topicId : topicIds) {
+                interestScores.merge(topicId, 3.0, Double::sum);
+            }
+        }
+
+        List<Long> commentedPostIds = postCommentRepository.findPostIdsByUserId(userId);
+        for (Long postId : commentedPostIds) {
+            List<Long> topicIds = postTopicRepository.findTopicIdsByPostId(postId);
+            for (Long topicId : topicIds) {
+                interestScores.merge(topicId, 1.5, Double::sum);
+            }
+        }
+
+        return interestScores;
+    }
+
+    private int countUserInteractions(Long userId) {
+        int likes = postLikeRepository.countByUserId(userId);
+        int bookmarks = postBookmarkRepository.countByUserId(userId);
+        int comments = postCommentRepository.countByUserId(userId);
+        return likes + bookmarks + comments;
+    }
+
+    private double calculatePersonalizedScore(CommunityPost post, Map<Long, Double> topicInterestScores, LocalDateTime now) {
+        double baseScore = calculatePostScore(post, now);
+
+        List<Long> postTopicIds = postTopicRepository.findTopicIdsByPostId(post.getId());
+        double interestBonus = 0;
+        for (Long topicId : postTopicIds) {
+            interestBonus += topicInterestScores.getOrDefault(topicId, 0.0);
+        }
+
+        double discoveryBoost = postTopicIds.stream()
+                .filter(tid -> !topicInterestScores.containsKey(tid))
+                .count() > 0 ? 1.5 : 0;
+
+        return baseScore + interestBonus * 2 + discoveryBoost + Math.random() * 0.3;
     }
 
     private Result<Map<String, Object>> buildPostListResult(
