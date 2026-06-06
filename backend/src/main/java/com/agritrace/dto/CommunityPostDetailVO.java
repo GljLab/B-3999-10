@@ -15,12 +15,15 @@ public class CommunityPostDetailVO {
     private String authorRole;
     private String authorAvatar;
     private LocalDateTime createdAt;
+    private LocalDateTime editedAt;
     private Integer viewCount;
     private Integer likeCount;
     private Integer bookmarkCount;
     private Integer commentCount;
     private Boolean liked;
     private Boolean bookmarked;
+    private List<TopicVO> topics;
+    private Integer isFeatured;
 
     public static CommunityPostDetailVO from(com.agritrace.entity.CommunityPost post, com.agritrace.entity.User user) {
         CommunityPostDetailVO vo = new CommunityPostDetailVO();
@@ -32,12 +35,15 @@ public class CommunityPostDetailVO {
         vo.setAuthorRole(user != null ? user.getRole() : "");
         vo.setAuthorAvatar(null);
         vo.setCreatedAt(post.getCreatedAt());
+        vo.setEditedAt(post.getEditedAt());
         vo.setViewCount(post.getViewCount());
         vo.setLikeCount(post.getLikeCount());
         vo.setBookmarkCount(post.getBookmarkCount());
         vo.setCommentCount(post.getCommentCount());
         vo.setLiked(false);
         vo.setBookmarked(false);
+        vo.setIsFeatured(post.getIsFeatured());
+        vo.setTopics(List.of());
 
         if (post.getImages() == null || post.getImages().trim().isEmpty()) {
             vo.setImages(List.of());

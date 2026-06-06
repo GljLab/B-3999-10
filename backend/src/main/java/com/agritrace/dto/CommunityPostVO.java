@@ -7,6 +7,7 @@ import java.util.List;
 @Data
 public class CommunityPostVO {
     private Long id;
+    private Long authorId;
     private String title;
     private String description;
     private String coverImage;
@@ -19,10 +20,13 @@ public class CommunityPostVO {
     private Integer commentCount;
     private Boolean liked;
     private Boolean bookmarked;
+    private List<TopicVO> topics;
+    private Integer isFeatured;
 
     public static CommunityPostVO from(com.agritrace.entity.CommunityPost post, com.agritrace.entity.User user) {
         CommunityPostVO vo = new CommunityPostVO();
         vo.setId(post.getId());
+        vo.setAuthorId(post.getUserId());
         vo.setTitle(post.getTitle());
         vo.setDescription(post.getDescription());
         vo.setAuthorName(user != null ? user.getRealName() != null ? user.getRealName() : user.getUsername() : "未知用户");
@@ -34,6 +38,8 @@ public class CommunityPostVO {
         vo.setCommentCount(post.getCommentCount());
         vo.setLiked(false);
         vo.setBookmarked(false);
+        vo.setIsFeatured(post.getIsFeatured());
+        vo.setTopics(List.of());
 
         List<String> imageList = parseImages(post.getImages());
         if (!imageList.isEmpty()) {

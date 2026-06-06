@@ -13,6 +13,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -30,56 +32,171 @@ public class CommunityController {
     private PostBookmarkRepository postBookmarkRepository;
     @Autowired
     private PostCommentRepository postCommentRepository;
+    @Autowired
+    private PostTopicRepository postTopicRepository;
+    @Autowired
+    private TopicRepository topicRepository;
+    @Autowired
+    private UserTopicFollowRepository userTopicFollowRepository;
 
     @Value("${app.upload.path:./uploads}")
     private String uploadPath;
+
+    private Long getCurrentUserId(HttpServletRequest request) {
+        try {
+            Object uid = request.getAttribute("userId");
+            if (uid != null) {
+                return ((Number) uid).longValue();
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private String getUserRole(HttpServletRequest request) {
+        try {
+            return (String) request.getAttribute("role");
+        } catch (Exception ignored) {}
+        return null;
+    }
+
+    private Map<Long, List<Topic>> getPostTopicsMap(List<CommunityPost> posts) {
+        if (posts.isEmpty()) return Map.of();
+        List<Long> postIds = posts.stream().map(CommunityPost::getId).toList();
+        List<Long> topicIds = postTopicRepository.findTopicIdsByPostIdIn(postIds);
+        List<Topic> allTopics = topicRepository.findByIdIn(topicIds);
+        Map<Long, Topic> topicMap = allTopics.stream().collect(Collectors.toMap(Topic::getId, t -> t));
+
+        Map<Long, List<Topic>> result = new HashMap<>();
+        for (Long postId : postIds) {
+            List<Long> pTopicIds = postTopicRepository.findTopicIdsByPostId(postId);
+            List<Topic> pTopics = pTopicIds.stream()
+                    .map(topicMap::get)
+                    .filter(Objects::nonNull)
+                    .toList();
+            result.put(postId, pTopics);
+        }
+        return result;
+    }
 
     @GetMapping("/posts")
     public Result<Map<String, Object>> listPosts(
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "timeline") String tab,
             HttpServletRequest request) {
+
+        Long currentUserId = getCurrentUserId(request);
+        Page<CommunityPost> postPage;
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        Page<CommunityPost> postPage = communityPostRepository.findAllByOrderByCreatedAtDesc(pageable);
 
-        Long currentUserId = null;
-        try {
-            Object uid = request.getAttribute("userId");
-            if (uid != null) {
-                currentUserId = ((Number) uid).longValue();
+        if ("followed".equals(tab) && currentUserId != null) {
+            List<Long> followedTopicIds = userTopicFollowRepository.findTopicIdsByUserId(currentUserId);
+            if (followedTopicIds.isEmpty()) {
+                Map<String, Object> emptyResult = new HashMap<>();
+                emptyResult.put("content", List.of());
+                emptyResult.put("totalElements", 0);
+                emptyResult.put("totalPages", 0);
+                emptyResult.put("currentPage", 0);
+                emptyResult.put("last", true);
+                return Result.success(emptyResult);
             }
-        } catch (Exception ignored) {}
+            List<Long> postIds = postTopicRepository.findPostIdsByTopicIdIn(followedTopicIds);
+            Set<Long> postIdSet = new HashSet<>(postIds);
+            List<CommunityPost> allPosts = postIdSet.stream()
+                    .map(id -> communityPostRepository.findById(id).orElse(null))
+                    .filter(Objects::nonNull)
+                    .filter(p -> ChronoUnit.DAYS.between(p.getCreatedAt(), LocalDateTime.now()) <= 30)
+                    .sorted(Comparator.comparing(CommunityPost::getCreatedAt).reversed())
+                    .toList();
 
-        final Long finalUserId = currentUserId;
+            int from = Math.min(page * size, allPosts.size());
+            int to = Math.min((page + 1) * size, allPosts.size());
+            List<CommunityPost> pagedPosts = from < to ? allPosts.subList(from, to) : List.of();
+
+            return buildPostListResult(pagedPosts, allPosts.size(), page, size, currentUserId);
+        } else if ("recommend".equals(tab)) {
+            Pageable allPageable = PageRequest.of(0, 200, Sort.by(Sort.Direction.DESC, "createdAt"));
+            Page<CommunityPost> allPostPage = communityPostRepository.findAllByOrderByCreatedAtDesc(allPageable);
+            List<CommunityPost> allPosts = allPostPage.getContent();
+
+            allPosts = allPosts.stream()
+                    .filter(p -> ChronoUnit.DAYS.between(p.getCreatedAt(), LocalDateTime.now()) <= 7)
+                    .sorted(Comparator.comparingDouble((CommunityPost p) ->
+                            calculatePostScore(p, LocalDateTime.now())).reversed())
+                    .toList();
+
+            Set<Long> usedTopics = new HashSet<>();
+            List<CommunityPost> diversePosts = new ArrayList<>();
+            for (CommunityPost post : allPosts) {
+                List<Long> postTopicIds = postTopicRepository.findTopicIdsByPostId(post.getId());
+                boolean hasNewTopic = postTopicIds.stream().anyMatch(tid -> !usedTopics.contains(tid));
+                if (hasNewTopic || diversePosts.size() < 5) {
+                    diversePosts.add(post);
+                    usedTopics.addAll(postTopicIds);
+                }
+                if (diversePosts.size() >= 50) break;
+            }
+
+            int from = Math.min(page * size, diversePosts.size());
+            int to = Math.min((page + 1) * size, diversePosts.size());
+            List<CommunityPost> pagedPosts = from < to ? diversePosts.subList(from, to) : List.of();
+
+            return buildPostListResult(pagedPosts, diversePosts.size(), page, size, currentUserId);
+        } else {
+            postPage = communityPostRepository.findAllByOrderByCreatedAtDesc(pageable);
+            return buildPostListResult(postPage.getContent(), postPage.getTotalElements(), page, size, currentUserId);
+        }
+    }
+
+    private double calculatePostScore(CommunityPost post, LocalDateTime now) {
+        long hours = ChronoUnit.HOURS.between(post.getCreatedAt(), now);
+        double timeWeight = 1.0;
+        if (hours <= 24) timeWeight = 2.0;
+        else if (hours <= 72) timeWeight = 1.5;
+        else if (hours <= 168) timeWeight = 1.0;
+        else timeWeight = 0.5;
+
+        double interactionScore = post.getViewCount() * 0.1 + post.getLikeCount()
+                + post.getBookmarkCount() * 2.0 + post.getCommentCount() * 3.0;
+        double qualityBonus = (post.getIsFeatured() != null && post.getIsFeatured() == 1) ? 10 : 0;
+
+        return (interactionScore + qualityBonus) * timeWeight + Math.random() * 0.5;
+    }
+
+    private Result<Map<String, Object>> buildPostListResult(
+            List<CommunityPost> posts, long total, int page, int size, Long currentUserId) {
+
         Set<Long> likedPostIds = new HashSet<>();
         Set<Long> bookmarkedPostIds = new HashSet<>();
-        if (finalUserId != null) {
-            List<Long> postIds = postPage.getContent().stream().map(CommunityPost::getId).toList();
-            if (!postIds.isEmpty()) {
-                likedPostIds = postLikeRepository.findByPostIdInAndUserId(postIds, finalUserId)
-                        .stream().map(PostLike::getPostId).collect(Collectors.toSet());
-                bookmarkedPostIds = postBookmarkRepository.findByPostIdInAndUserId(postIds, finalUserId)
-                        .stream().map(PostBookmark::getPostId).collect(Collectors.toSet());
-            }
+
+        if (currentUserId != null && !posts.isEmpty()) {
+            List<Long> postIds = posts.stream().map(CommunityPost::getId).toList();
+            likedPostIds = postLikeRepository.findByPostIdInAndUserId(postIds, currentUserId)
+                    .stream().map(PostLike::getPostId).collect(Collectors.toSet());
+            bookmarkedPostIds = postBookmarkRepository.findByPostIdInAndUserId(postIds, currentUserId)
+                    .stream().map(PostBookmark::getPostId).collect(Collectors.toSet());
         }
 
+        Map<Long, List<Topic>> postTopicsMap = getPostTopicsMap(posts);
         Set<Long> finalLikedPostIds = likedPostIds;
         Set<Long> finalBookmarkedPostIds = bookmarkedPostIds;
 
         Map<String, Object> result = new HashMap<>();
-        result.put("content", postPage.getContent().stream().map(post -> {
+        result.put("content", posts.stream().map(post -> {
             User author = userRepository.findById(post.getUserId()).orElse(null);
             CommunityPostVO vo = CommunityPostVO.from(post, author);
-            if (finalUserId != null) {
+            if (currentUserId != null) {
                 vo.setLiked(finalLikedPostIds.contains(post.getId()));
                 vo.setBookmarked(finalBookmarkedPostIds.contains(post.getId()));
             }
+            List<Topic> postTopics = postTopicsMap.getOrDefault(post.getId(), List.of());
+            vo.setTopics(postTopics.stream().map(TopicVO::from).toList());
             return vo;
         }).toList());
-        result.put("totalElements", postPage.getTotalElements());
-        result.put("totalPages", postPage.getTotalPages());
-        result.put("currentPage", postPage.getNumber());
-        result.put("last", postPage.isLast());
+        result.put("totalElements", total);
+        result.put("totalPages", (int) Math.ceil((double) total / size));
+        result.put("currentPage", page);
+        result.put("last", (page + 1) * size >= total);
 
         return Result.success(result);
     }
@@ -97,23 +214,21 @@ public class CommunityController {
         User author = userRepository.findById(post.getUserId()).orElse(null);
         CommunityPostDetailVO vo = CommunityPostDetailVO.from(post, author);
 
-        Long currentUserId = null;
-        try {
-            Object uid = request.getAttribute("userId");
-            if (uid != null) {
-                currentUserId = ((Number) uid).longValue();
-            }
-        } catch (Exception ignored) {}
-
+        Long currentUserId = getCurrentUserId(request);
         if (currentUserId != null) {
             vo.setLiked(postLikeRepository.existsByPostIdAndUserId(id, currentUserId));
             vo.setBookmarked(postBookmarkRepository.existsByPostIdAndUserId(id, currentUserId));
         }
 
+        List<Long> topicIds = postTopicRepository.findTopicIdsByPostId(id);
+        List<Topic> topics = topicRepository.findByIdIn(topicIds);
+        vo.setTopics(topics.stream().map(TopicVO::from).toList());
+
         return Result.success(vo);
     }
 
     @PostMapping("/posts")
+    @Transactional
     public Result<CommunityPostVO> createPost(HttpServletRequest request, @RequestBody CommunityPostRequest req) {
         if (req.getTitle() == null || req.getTitle().trim().isEmpty()) {
             return Result.error(400, "主题不能为空");
@@ -127,12 +242,14 @@ public class CommunityController {
         if (req.getDescription().length() > 1000) {
             return Result.error(400, "详细描述不能超过1000字");
         }
-
         if (req.getImages() != null && !req.getImages().trim().isEmpty()) {
             String[] imageArray = req.getImages().split(",");
             if (imageArray.length > 3) {
                 return Result.error(400, "最多只能上传3张图片");
             }
+        }
+        if (req.getTopicIds() != null && req.getTopicIds().size() > 5) {
+            return Result.error(400, "最多只能关联5个话题标签");
         }
 
         Long userId = ((Number) request.getAttribute("userId")).longValue();
@@ -144,8 +261,131 @@ public class CommunityController {
         post.setImages(req.getImages() != null ? req.getImages().trim() : null);
         communityPostRepository.save(post);
 
+        if (req.getTopicIds() != null && !req.getTopicIds().isEmpty()) {
+            Set<Long> topicIdSet = new HashSet<>(req.getTopicIds());
+            List<Topic> topics = topicRepository.findByIdIn(new ArrayList<>(topicIdSet));
+            Map<Long, Topic> topicMap = topics.stream().collect(Collectors.toMap(Topic::getId, t -> t));
+
+            for (Long topicId : topicIdSet) {
+                Topic topic = topicMap.get(topicId);
+                if (topic != null && topic.getStatus() == 1) {
+                    PostTopic postTopic = new PostTopic();
+                    postTopic.setPostId(post.getId());
+                    postTopic.setTopicId(topicId);
+                    postTopicRepository.save(postTopic);
+                    topic.setPostCount(topic.getPostCount() + 1);
+                    topicRepository.save(topic);
+                }
+            }
+        }
+
         User author = userRepository.findById(userId).orElse(null);
-        return Result.success(CommunityPostVO.from(post, author));
+        CommunityPostVO vo = CommunityPostVO.from(post, author);
+
+        if (req.getTopicIds() != null && !req.getTopicIds().isEmpty()) {
+            List<Topic> topics = topicRepository.findByIdIn(new ArrayList<>(new HashSet<>(req.getTopicIds())));
+            vo.setTopics(topics.stream().map(TopicVO::from).toList());
+        }
+
+        return Result.success(vo);
+    }
+
+    @PutMapping("/posts/{id}")
+    @Transactional
+    public Result<CommunityPostVO> updatePost(HttpServletRequest request,
+                                               @PathVariable Long id,
+                                               @RequestBody CommunityPostRequest req) {
+        CommunityPost post = communityPostRepository.findById(id).orElse(null);
+        if (post == null) {
+            return Result.error(404, "内容不存在");
+        }
+
+        Long currentUserId = getCurrentUserId(request);
+        String role = getUserRole(request);
+
+        if (!post.getUserId().equals(currentUserId) && !"SYS_ADMIN".equals(role)) {
+            return Result.error(403, "无权编辑此内容");
+        }
+
+        if (req.getTitle() != null) {
+            if (req.getTitle().trim().isEmpty()) {
+                return Result.error(400, "主题不能为空");
+            }
+            if (req.getTitle().length() > 50) {
+                return Result.error(400, "主题长度不能超过50字");
+            }
+            post.setTitle(req.getTitle().trim());
+        }
+
+        if (req.getDescription() != null) {
+            if (req.getDescription().trim().isEmpty()) {
+                return Result.error(400, "详细描述不能为空");
+            }
+            if (req.getDescription().length() > 1000) {
+                return Result.error(400, "详细描述不能超过1000字");
+            }
+            post.setDescription(req.getDescription().trim());
+        }
+
+        if (req.getImages() != null) {
+            String[] imageArray = req.getImages().split(",");
+            if (imageArray.length > 3) {
+                return Result.error(400, "最多只能上传3张图片");
+            }
+            post.setImages(req.getImages().trim());
+        }
+
+        post.setEditedAt(LocalDateTime.now());
+        communityPostRepository.save(post);
+
+        if (req.getTopicIds() != null) {
+            if (req.getTopicIds().size() > 5) {
+                return Result.error(400, "最多只能关联5个话题标签");
+            }
+
+            Set<Long> newTopicIds = new HashSet<>(req.getTopicIds());
+            List<Long> oldTopicIds = postTopicRepository.findTopicIdsByPostId(id);
+            Set<Long> oldTopicIdSet = new HashSet<>(oldTopicIds);
+
+            Set<Long> toAdd = new HashSet<>(newTopicIds);
+            toAdd.removeAll(oldTopicIdSet);
+
+            Set<Long> toRemove = new HashSet<>(oldTopicIdSet);
+            toRemove.removeAll(newTopicIds);
+
+            List<Topic> allTopics = topicRepository.findByIdIn(new ArrayList<>(newTopicIds));
+            Map<Long, Topic> topicMap = allTopics.stream().collect(Collectors.toMap(Topic::getId, t -> t));
+
+            for (Long topicId : toAdd) {
+                Topic topic = topicMap.get(topicId);
+                if (topic != null && topic.getStatus() == 1) {
+                    PostTopic postTopic = new PostTopic();
+                    postTopic.setPostId(id);
+                    postTopic.setTopicId(topicId);
+                    postTopicRepository.save(postTopic);
+                    topic.setPostCount(topic.getPostCount() + 1);
+                    topicRepository.save(topic);
+                }
+            }
+
+            for (Long topicId : toRemove) {
+                postTopicRepository.deleteByPostIdAndTopicIdNotIn(id, newTopicIds);
+                Topic topic = topicRepository.findById(topicId).orElse(null);
+                if (topic != null) {
+                    topic.setPostCount(Math.max(0, topic.getPostCount() - 1));
+                    topicRepository.save(topic);
+                }
+            }
+        }
+
+        User author = userRepository.findById(post.getUserId()).orElse(null);
+        CommunityPostVO vo = CommunityPostVO.from(post, author);
+
+        List<Long> finalTopicIds = postTopicRepository.findTopicIdsByPostId(id);
+        List<Topic> finalTopics = topicRepository.findByIdIn(finalTopicIds);
+        vo.setTopics(finalTopics.stream().map(TopicVO::from).toList());
+
+        return Result.success(vo);
     }
 
     @DeleteMapping("/posts/{id}")
@@ -163,6 +403,16 @@ public class CommunityController {
             return Result.error(403, "无权删除此内容");
         }
 
+        List<Long> topicIds = postTopicRepository.findTopicIdsByPostId(id);
+        for (Long topicId : topicIds) {
+            Topic topic = topicRepository.findById(topicId).orElse(null);
+            if (topic != null) {
+                topic.setPostCount(Math.max(0, topic.getPostCount() - 1));
+                topicRepository.save(topic);
+            }
+        }
+
+        postTopicRepository.deleteByPostId(id);
         postLikeRepository.deleteByPostId(id);
         postBookmarkRepository.deleteByPostId(id);
         postCommentRepository.deleteByPostId(id);
@@ -380,10 +630,6 @@ public class CommunityController {
                 post.setCommentCount(Math.max(0, post.getCommentCount() - 1));
                 communityPostRepository.save(post);
             }
-        }
-
-        if (hasReplies && post != null) {
-            // deleted comment still counts in commentCount for display
         }
 
         return Result.success("删除成功");

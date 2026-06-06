@@ -30,6 +30,8 @@ const routes = [
       { path: 'users', name: 'UserAdmin', component: () => import('@/views/UserAdmin.vue'), meta: { roles: ['SYS_ADMIN'] } },
       { path: 'community', name: 'CommunitySquare', component: () => import('@/views/CommunitySquare.vue') },
       { path: 'community/:id', name: 'CommunityDetail', component: () => import('@/views/CommunityDetail.vue') },
+      { path: 'topics', name: 'TopicSquare', component: () => import('@/views/TopicSquare.vue') },
+      { path: 'topics/:id', name: 'TopicDetail', component: () => import('@/views/TopicDetail.vue') },
       { path: 'my-interactions', name: 'MyInteractions', component: () => import('@/views/MyInteractions.vue') },
       { path: 'community-admin', name: 'CommunityAdmin', component: () => import('@/views/CommunityAdmin.vue'), meta: { roles: ['SYS_ADMIN'] } }
     ]
@@ -43,9 +45,9 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
   const store = useUserStore()
-  const communityPaths = ['/community']
-  const isCommunityRead = communityPaths.some(p => to.path === p || to.path.startsWith('/community/'))
-  if (to.path !== '/login' && to.path !== '/register' && !store.token && !isCommunityRead) {
+  const publicPaths = ['/community', '/topics']
+  const isPublicRead = publicPaths.some(p => to.path === p || to.path.startsWith('/community/') || to.path.startsWith('/topics/'))
+  if (to.path !== '/login' && to.path !== '/register' && !store.token && !isPublicRead) {
     next('/login')
   } else if (to.path === '/my-interactions' && !store.token) {
     next('/login')

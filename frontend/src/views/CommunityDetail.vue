@@ -24,10 +24,24 @@
                 <el-tag v-if="post.authorRole === 'FARMER'" type="warning" size="small" effect="dark">农场主</el-tag>
                 <el-tag v-else-if="post.authorRole === 'SYS_ADMIN'" type="danger" size="small" effect="dark">管理者</el-tag>
               </div>
-              <span class="text-sm text-gray-400">{{ formatTime(post.createdAt) }}</span>
+              <div class="flex items-center gap-2 text-sm text-gray-400">
+                <span>{{ formatTime(post.createdAt) }}</span>
+                <span v-if="post.editedAt" class="text-gray-400">
+                  (最后编辑于 {{ formatTime(post.editedAt) }})
+                </span>
+              </div>
             </div>
           </div>
           <div class="flex items-center gap-3">
+            <el-button
+              v-if="canEdit"
+              type="primary"
+              plain
+              size="small"
+              @click="openEditor"
+            >
+              ✏️ 编辑内容
+            </el-button>
             <el-button
               v-if="canDelete"
               type="danger"
@@ -40,7 +54,34 @@
           </div>
         </div>
 
-        <h1 class="text-2xl font-bold text-gray-800 mb-6">{{ post.title }}</h1>
+        <h1 class="text-2xl font-bold text-gray-800 mb-4">{{ post.title }}</h1>
+
+        <div v-if="post.topics && post.topics.length > 0" class="flex flex-wrap gap-2 mb-6">
+          <el-tag
+            v-for="t in post.topics"
+            :key="t.id"
+            type="success"
+            size="small"
+            effect="light"
+            class="cursor-pointer hover:bg-green-100"
+            @click="goTopicDetail(t.id)"
+          >
+            {{ t.icon }} {{ t.name }}
+          </el-tag>
+        </div>
+
+        <div
+          v-if="canEdit && (!post.topics || post.topics.length === 0)"
+          class="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl"
+        >
+          <div class="flex items-center justify-between">
+            <div>
+              <p class="text-amber-800 font-medium">💡 这篇内容还没有话题标签</p>
+              <p class="text-sm text-amber-600 mt-1">添加标签可以让更多人看到你的内容</p>
+            </div>
+            <el-button type="warning" size="small" @click="openEditor">去添加标签</el-button>
+          </div>
+        </div>
 
         <div class="prose max-w-none text-gray-700 whitespace-pre-wrap leading-relaxed text-base mb-6">
           {{ post.description }}
@@ -240,6 +281,86 @@
       </div>
     </div>
 
+    <el-dialog v-model="editorVisible" title="编辑内容" width="600px" :close-on-click-modal="false" destroy-on-close>
+      <el-form label-position="top" :model="editForm">
+        <el-form-item label="主题" required>
+          <el-input v-model="editForm.title" placeholder="请输入分享主题（50字以内）" maxlength="50" show-word-limit />
+        </el-form-item>
+        <el-form-item label="话题标签" :required="false">
+          <div class="mb-2">
+            <span class="text-xs text-gray-500">最多选择5个话题，添加话题可以让更多人看到你的内容</span>
+          </div>
+          <div class="flex flex-wrap gap-2 mb-3">
+            <el-tag
+              v-for="topic in editSelectedTopics"
+              :key="topic.id"
+              type="success"
+              closable
+              @close="removeEditTopic(topic)"
+            >
+              {{ topic.icon }} {{ topic.name }}
+            </el-tag>
+            <span v-if="editSelectedTopics.length === 0" class="text-sm text-gray-400">未选择话题</span>
+          </div>
+          <el-select
+            v-model="editSearchTopic"
+            placeholder="搜索并添加话题..."
+            filterable
+            remote
+            :remote-method="searchEditTopics"
+            :loading="editTopicLoading"
+            class="w-full"
+            @change="handleEditTopicSelect"
+            :disabled="editSelectedTopics.length >= 5"
+          >
+            <el-option
+              v-for="topic in editAvailableTopics"
+              :key="topic.id"
+              :label="topic.icon + ' ' + topic.name"
+              :value="topic.id"
+              :disabled="editSelectedTopics.some(t => t.id === topic.id)"
+            >
+              <span>{{ topic.icon }} {{ topic.name }}</span>
+              <span class="text-xs text-gray-400 ml-2">{{ topic.postCount }}篇</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="详细描述" required>
+          <el-input
+            v-model="editForm.description"
+            type="textarea"
+            placeholder="分享你的故事、感受或生活记录..."
+            :rows="6"
+            maxlength="1000"
+            show-word-limit
+          />
+        </el-form-item>
+        <el-form-item label="配图（最多3张，支持JPG/PNG，单张不超过5MB）">
+          <div class="flex gap-3 flex-wrap">
+            <div v-for="(img, idx) in editForm.imageList" :key="idx" class="relative w-24 h-24 rounded-lg overflow-hidden border border-gray-200">
+              <img :src="img.url" class="w-full h-full object-cover" />
+              <div
+                class="absolute top-1 right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center cursor-pointer text-white text-xs"
+                @click="removeEditImage(idx)"
+              >✕</div>
+            </div>
+            <div
+              v-if="editForm.imageList.length < 3"
+              class="w-24 h-24 border-2 border-dashed border-gray-300 rounded-lg flex items-center justify-center cursor-pointer hover:border-green-400 transition-colors"
+              @click="triggerEditUpload"
+            >
+              <el-icon class="text-2xl text-gray-400"><Plus /></el-icon>
+            </div>
+          </div>
+          <input ref="editFileInput" type="file" accept=".jpg,.jpeg,.png" class="hidden" @change="handleEditFileChange" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="editorVisible = false">取消</el-button>
+        <el-button type="primary" :loading="editSubmitting" @click="submitEdit">保存修改</el-button>
+      </template>
+    </el-dialog>
+
     <el-dialog v-model="previewVisible" width="80%" :show-close="true" destroy-on-close>
       <div class="flex items-center justify-center">
         <img v-if="post && post.images && post.images[previewIndex]" :src="getImageUrl(post.images[previewIndex])" class="max-w-full max-h-[70vh] object-contain" alt="" />
@@ -254,11 +375,11 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from '@/api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowLeft, Loading } from '@element-plus/icons-vue'
+import { ArrowLeft, Loading, Plus } from '@element-plus/icons-vue'
 import { useUserStore } from '@/store/user'
 
 const route = useRoute()
@@ -279,6 +400,19 @@ const replyContent = ref('')
 const likeAnimating = ref(false)
 const bookmarkAnimating = ref(false)
 
+const editorVisible = ref(false)
+const editSubmitting = ref(false)
+const editFileInput = ref(null)
+const editForm = ref({
+  title: '',
+  description: '',
+  imageList: []
+})
+const editAvailableTopics = ref([])
+const editSelectedTopics = ref([])
+const editSearchTopic = ref('')
+const editTopicLoading = ref(false)
+
 const getImageUrl = (url) => {
   if (!url) return ''
   if (url.startsWith('http')) return url
@@ -295,6 +429,13 @@ const formatTime = (createdAt) => {
     minute: '2-digit'
   })
 }
+
+const canEdit = computed(() => {
+  if (!userStore.token || !post.value) return false
+  if (userStore.role === 'SYS_ADMIN') return true
+  if (post.value.authorId && String(post.value.authorId) === String(userStore.userId)) return true
+  return false
+})
 
 const canDelete = computed(() => {
   if (!userStore.token || !post.value) return false
@@ -354,6 +495,10 @@ const goBack = () => {
 const goLogin = () => {
   ElMessage.warning('请先登录后再操作')
   router.push('/login')
+}
+
+const goTopicDetail = (id) => {
+  router.push(`/topics/${id}`)
 }
 
 const openPreview = (idx) => {
@@ -456,9 +601,139 @@ const confirmDelete = async () => {
   }
 }
 
+const openEditor = async () => {
+  if (!post.value) return
+  editForm.value = {
+    title: post.value.title,
+    description: post.value.description,
+    imageList: (post.value.images || []).map(img => ({ url: getImageUrl(img), path: img }))
+  }
+  editSelectedTopics.value = post.value.topics ? [...post.value.topics] : []
+  await loadEditTopicList()
+  editorVisible.value = true
+}
+
+const loadEditTopicList = async () => {
+  try {
+    const res = await api.get('/topics/select-list')
+    editAvailableTopics.value = res.data
+  } catch (e) {}
+}
+
+const searchEditTopics = async (keyword) => {
+  if (!keyword) {
+    loadEditTopicList()
+    return
+  }
+  editTopicLoading.value = true
+  try {
+    const res = await api.get('/topics', {
+      params: { keyword, page: 0, size: 20 }
+    })
+    editAvailableTopics.value = res.data.content
+  } finally {
+    editTopicLoading.value = false
+  }
+}
+
+const handleEditTopicSelect = (topicId) => {
+  const topic = editAvailableTopics.value.find(t => t.id === topicId)
+  if (topic && !editSelectedTopics.value.some(t => t.id === topicId)) {
+    if (editSelectedTopics.value.length >= 5) {
+      ElMessage.warning('最多只能选择5个话题')
+      return
+    }
+    editSelectedTopics.value.push(topic)
+  }
+  editSearchTopic.value = ''
+}
+
+const removeEditTopic = (topic) => {
+  const idx = editSelectedTopics.value.findIndex(t => t.id === topic.id)
+  if (idx > -1) {
+    editSelectedTopics.value.splice(idx, 1)
+  }
+}
+
+const triggerEditUpload = () => {
+  editFileInput.value.click()
+}
+
+const handleEditFileChange = async (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+
+  const validTypes = ['image/jpeg', 'image/jpg', 'image/png']
+  if (!validTypes.includes(file.type)) {
+    ElMessage.error('仅支持JPG和PNG格式的图片')
+    e.target.value = ''
+    return
+  }
+  if (file.size > 5 * 1024 * 1024) {
+    ElMessage.error('单张图片不能超过5MB')
+    e.target.value = ''
+    return
+  }
+
+  const formData = new FormData()
+  formData.append('file', file)
+
+  try {
+    const res = await api.post('/community/posts/image', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 30000
+    })
+    editForm.value.imageList.push({
+      url: getImageUrl(res.data),
+      path: res.data
+    })
+  } catch (err) {
+    ElMessage.error('图片上传失败')
+  }
+  e.target.value = ''
+}
+
+const removeEditImage = (idx) => {
+  editForm.value.imageList.splice(idx, 1)
+}
+
+const submitEdit = async () => {
+  if (!editForm.value.title.trim()) {
+    ElMessage.error('请输入分享主题')
+    return
+  }
+  if (!editForm.value.description.trim()) {
+    ElMessage.error('请输入详细描述')
+    return
+  }
+
+  editSubmitting.value = true
+  try {
+    const payload = {
+      title: editForm.value.title.trim(),
+      description: editForm.value.description.trim(),
+      images: editForm.value.imageList.map(img => img.path).join(',') || null,
+      topicIds: editSelectedTopics.value.map(t => t.id)
+    }
+    await api.put(`/community/posts/${post.value.id}`, payload)
+    ElMessage.success('修改保存成功！')
+    editorVisible.value = false
+    await loadPost()
+  } finally {
+    editSubmitting.value = false
+  }
+}
+
 onMounted(() => {
   loadPost()
   loadComments(true)
+})
+
+watch(() => route.query.edit, (val) => {
+  if (val === '1' && post.value && canEdit.value) {
+    openEditor()
+    router.replace({ query: {} })
+  }
 })
 </script>
 

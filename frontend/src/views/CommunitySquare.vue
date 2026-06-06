@@ -1,10 +1,23 @@
 <template>
   <div class="space-y-6">
     <div class="flex justify-between items-center">
-      <h2 class="text-2xl font-bold text-gray-800">🌾 社区广场</h2>
+      <div class="flex items-center gap-4">
+        <h2 class="text-2xl font-bold text-gray-800">🌾 社区广场</h2>
+        <el-button text @click="goTopicSquare" class="text-green-600">
+          🏷️ 话题广场
+        </el-button>
+      </div>
       <el-button type="primary" round @click="openEditor">
         ✏️ 我要分享
       </el-button>
+    </div>
+
+    <div class="bg-white rounded-2xl shadow-sm border border-gray-100 p-4">
+      <el-tabs v-model="activeTab" @tab-change="handleTabChange">
+        <el-tab-pane label="推荐" name="recommend" />
+        <el-tab-pane v-if="userStore.token" label="关注" name="followed" />
+        <el-tab-pane label="最新" name="timeline" />
+      </el-tabs>
     </div>
 
     <div v-if="posts.length === 0 && !loading" class="bg-white rounded-2xl p-12 shadow-sm border border-gray-100 text-center">
@@ -29,6 +42,19 @@
           </div>
         </div>
         <div class="p-5">
+          <div class="flex flex-wrap gap-1 mb-2">
+            <el-tag
+              v-for="t in post.topics"
+              :key="t.id"
+              type="success"
+              size="small"
+              effect="light"
+              class="cursor-pointer hover:bg-green-100"
+              @click.stop="goTopicDetail(t.id)"
+            >
+              {{ t.icon }} {{ t.name }}
+            </el-tag>
+          </div>
           <h3 class="text-lg font-bold text-gray-800 mb-2 truncate cursor-pointer hover:text-green-600 transition-colors" @click="goDetail(post.id)">{{ post.title }}</h3>
           <p class="text-sm text-gray-500 line-clamp-2 mb-3">
             {{ truncateDesc(post.description) }}
@@ -88,6 +114,45 @@
         <el-form-item label="主题" required>
           <el-input v-model="editorForm.title" placeholder="请输入分享主题（50字以内）" maxlength="50" show-word-limit />
         </el-form-item>
+        <el-form-item label="话题标签" :required="false">
+          <div class="mb-2">
+            <span class="text-xs text-gray-500">最多选择5个话题，添加话题可以让更多人看到你的内容</span>
+          </div>
+          <div class="flex flex-wrap gap-2 mb-3">
+            <el-tag
+              v-for="topic in selectedTopics"
+              :key="topic.id"
+              type="success"
+              closable
+              @close="removeTopic(topic)"
+            >
+              {{ topic.icon }} {{ topic.name }}
+            </el-tag>
+            <span v-if="selectedTopics.length === 0" class="text-sm text-gray-400">未选择话题</span>
+          </div>
+          <el-select
+            v-model="searchTopicKeyword"
+            placeholder="搜索并添加话题..."
+            filterable
+            remote
+            :remote-method="searchTopics"
+            :loading="topicSearchLoading"
+            class="w-full"
+            @change="handleTopicSelect"
+            :disabled="selectedTopics.length >= 5"
+          >
+            <el-option
+              v-for="topic in availableTopics"
+              :key="topic.id"
+              :label="topic.icon + ' ' + topic.name"
+              :value="topic.id"
+              :disabled="selectedTopics.some(t => t.id === topic.id)"
+            >
+              <span>{{ topic.icon }} {{ topic.name }}</span>
+              <span class="text-xs text-gray-400 ml-2">{{ topic.postCount }}篇</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
         <el-form-item label="详细描述" required>
           <el-input
             v-model="editorForm.description"
@@ -123,6 +188,16 @@
         <el-button type="primary" :loading="submitting" @click="submitPost">发布分享</el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="addTagTipsVisible" title="添加话题标签" width="400px" :close-on-click-modal="false">
+      <div class="text-center py-4">
+        <p class="text-gray-600 mb-4">添加话题标签可以让更多人看到你的内容，现在添加？</p>
+        <div class="flex justify-center gap-3">
+          <el-button @click="addTagTipsVisible = false">稍后再说</el-button>
+          <el-button type="primary" @click="goEditLastPost">去添加</el-button>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -144,7 +219,11 @@ const lastPage = ref(false)
 const sentinel = ref(null)
 let observer = null
 
+const activeTab = ref('recommend')
+const lastPostId = ref(null)
+
 const editorVisible = ref(false)
+const addTagTipsVisible = ref(false)
 const submitting = ref(false)
 const fileInput = ref(null)
 const editorForm = ref({
@@ -152,6 +231,11 @@ const editorForm = ref({
   description: '',
   imageList: []
 })
+
+const availableTopics = ref([])
+const selectedTopics = ref([])
+const searchTopicKeyword = ref('')
+const topicSearchLoading = ref(false)
 
 const getImageUrl = (url) => {
   if (!url) return ''
@@ -194,7 +278,13 @@ const loadPosts = async (reset = false) => {
   loading.value = true
   try {
     const page = reset ? 0 : currentPage.value
-    const res = await api.get('/community/posts', { params: { page, size: 20 } })
+    const res = await api.get('/community/posts', {
+      params: {
+        page,
+        size: 20,
+        tab: activeTab.value
+      }
+    })
     const data = res.data
     if (reset) {
       posts.value = data.content
@@ -209,8 +299,66 @@ const loadPosts = async (reset = false) => {
   }
 }
 
+const handleTabChange = () => {
+  loadPosts(true)
+}
+
+const loadTopicList = async () => {
+  try {
+    const res = await api.get('/topics/select-list')
+    availableTopics.value = res.data
+  } catch (e) {}
+}
+
+const searchTopics = async (keyword) => {
+  if (!keyword) {
+    loadTopicList()
+    return
+  }
+  topicSearchLoading.value = true
+  try {
+    const res = await api.get('/topics', {
+      params: {
+        keyword,
+        page: 0,
+        size: 20
+      }
+    })
+    availableTopics.value = res.data.content
+  } finally {
+    topicSearchLoading.value = false
+  }
+}
+
+const handleTopicSelect = (topicId) => {
+  const topic = availableTopics.value.find(t => t.id === topicId)
+  if (topic && !selectedTopics.value.some(t => t.id === topicId)) {
+    if (selectedTopics.value.length >= 5) {
+      ElMessage.warning('最多只能选择5个话题')
+      return
+    }
+    selectedTopics.value.push(topic)
+  }
+  searchTopicKeyword.value = ''
+}
+
+const removeTopic = (topic) => {
+  const idx = selectedTopics.value.findIndex(t => t.id === topic.id)
+  if (idx > -1) {
+    selectedTopics.value.splice(idx, 1)
+  }
+}
+
 const goDetail = (id) => {
   router.push(`/community/${id}`)
+}
+
+const goTopicSquare = () => {
+  router.push('/topics')
+}
+
+const goTopicDetail = (id) => {
+  router.push(`/topics/${id}`)
 }
 
 const goLogin = () => {
@@ -253,6 +401,8 @@ const openEditor = () => {
     return
   }
   editorForm.value = { title: '', description: '', imageList: [] }
+  selectedTopics.value = []
+  loadTopicList()
   editorVisible.value = true
 }
 
@@ -313,14 +463,29 @@ const submitPost = async () => {
     const payload = {
       title: editorForm.value.title.trim(),
       description: editorForm.value.description.trim(),
-      images: editorForm.value.imageList.map(img => img.path).join(',') || null
+      images: editorForm.value.imageList.map(img => img.path).join(',') || null,
+      topicIds: selectedTopics.value.map(t => t.id)
     }
-    await api.post('/community/posts', payload)
+    const res = await api.post('/community/posts', payload)
+    lastPostId.value = res.data.id
     ElMessage.success('分享发布成功！')
     editorVisible.value = false
     await loadPosts(true)
+
+    if (selectedTopics.value.length === 0) {
+      setTimeout(() => {
+        addTagTipsVisible.value = true
+      }, 500)
+    }
   } finally {
     submitting.value = false
+  }
+}
+
+const goEditLastPost = () => {
+  addTagTipsVisible.value = false
+  if (lastPostId.value) {
+    router.push(`/community/${lastPostId.value}?edit=1`)
   }
 }
 
