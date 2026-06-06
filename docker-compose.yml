@@ -17,6 +17,7 @@ services:
       - ./backend/sql/upgrade_20260604_product_spec.sql:/docker-entrypoint-initdb.d/03_upgrade_product_spec.sql
       - ./backend/sql/upgrade_20260604_community.sql:/docker-entrypoint-initdb.d/04_upgrade_community.sql
       - ./backend/sql/upgrade_20260605_interaction.sql:/docker-entrypoint-initdb.d/05_upgrade_interaction.sql
+      - ./backend/sql/upgrade_20260606_topic_system.sql:/docker-entrypoint-initdb.d/06_upgrade_topic_system.sql
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone='+08:00'
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]

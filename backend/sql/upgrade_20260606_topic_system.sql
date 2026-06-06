@@ -1,5 +1,8 @@
 USE `agri_trace`;
 
+SET NAMES utf8mb4;
+SET CHARACTER SET utf8mb4;
+
 -- ----------------------------
 -- 1. Table structure for topic : 话题标签表
 -- ----------------------------
