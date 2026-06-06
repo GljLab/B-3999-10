@@ -1,0 +1,21 @@
+# ========== 后端backend（只忽略编译产物、本地配置，源码保留提交）
+backend/target/
+backend/out/
+backend/.idea/
+backend/logs/
+backend/*.log
+
+# ========== 前端frontend（只忽略打包、依赖）
+frontend/node_modules/
+frontend/dist/
+frontend/.vscode/
+
+# 上传资源
+uploads/
+!uploads/.gitkeep
+
+# 系统垃圾
+.DS_Store
+Thumbs.db
+*.swp
+*.sql.bak

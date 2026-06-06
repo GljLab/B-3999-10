@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  db:
+    image: mysql:8.0
+    container_name: agri_trace_db
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: agri_trace
+      TZ: Asia/Shanghai
+    ports:
+      - "39991:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./agri_trace_init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      - ./backend/sql/upgrade_20260604_batch.sql:/docker-entrypoint-initdb.d/02_upgrade_batch.sql
+      - ./backend/sql/upgrade_20260604_product_spec.sql:/docker-entrypoint-initdb.d/03_upgrade_product_spec.sql
+      - ./backend/sql/upgrade_20260604_community.sql:/docker-entrypoint-initdb.d/04_upgrade_community.sql
+      - ./backend/sql/upgrade_20260605_interaction.sql:/docker-entrypoint-initdb.d/05_upgrade_interaction.sql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --default-time-zone='+08:00'
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: 
+      context: ./backend
+    container_name: agri_trace_backend
+    environment:
+      - TZ=Asia/Shanghai
+      - SPRING_DATASOURCE_URL=jdbc:mysql://db:3306/agri_trace?useUnicode=true&characterEncoding=UTF-8&serverTimezone=Asia/Shanghai
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=root
+      - APP_UPLOAD_PATH=/app/uploads
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build: 
+      context: ./frontend
+    container_name: agri_trace_frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  db_data:
