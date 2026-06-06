@@ -26,6 +26,12 @@
         <router-link v-if="userStore.role === 'SYS_ADMIN'" to="/community-admin" class="block px-6 py-3 text-gray-700 hover:bg-green-50 hover:text-green-600 transition-colors" active-class="bg-green-50 text-green-600 border-r-4 border-green-600">
           社区内容管理
         </router-link>
+        <router-link v-if="userStore.role === 'SYS_ADMIN'" to="/topic-admin" class="block px-6 py-3 text-gray-700 hover:bg-green-50 hover:text-green-600 transition-colors" active-class="bg-green-50 text-green-600 border-r-4 border-green-600">
+          话题管理
+        </router-link>
+        <router-link v-if="userStore.role === 'SYS_ADMIN'" to="/smart-tagging" class="block px-6 py-3 text-gray-700 hover:bg-green-50 hover:text-green-600 transition-colors" active-class="bg-green-50 text-green-600 border-r-4 border-green-600">
+          智能标注
+        </router-link>
       </nav>
       <div class="p-4 border-t flex flex-col">
         <span class="text-sm text-gray-500 mb-2">当前用户: {{userStore.realName}} ({{userStore.role}})</span>
